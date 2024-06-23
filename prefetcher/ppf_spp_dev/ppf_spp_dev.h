@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <vector>
+#include "cache.h"
 
 namespace spp
 {
@@ -45,11 +46,12 @@ constexpr uint32_t GLOBAL_COUNTER_MAX = ((1 << GLOBAL_COUNTER_BIT) - 1);
 constexpr std::size_t MAX_GHR_ENTRY = 8;
 
 // PPF parameters
-constexpr int32_t PPF_T_HI;
-constexpr int32_t PPF_T_LO;
-constexpr int32_t PPF_THETA_P;
-constexpr int32_t PPF_THETA_N;
-constexpr uint8_t MAX_SPECULATION_DEPTH = 10;
+constexpr int32_t PPF_T_HI = 90;		// Send to L2C if higher, LLC if lower than this
+constexpr int32_t PPF_T_LO = -90;		// Reject if lower than this
+constexpr int32_t PPF_THETA_P = 108;	// Retrain on hit if lower than this
+constexpr int32_t PPF_THETA_N = -108;	// Retrain on miss if higher than this
+
+constexpr uint8_t MAX_SPECULATION_DEPTH = 20;
 
 constexpr unsigned PERCEPTRON_WEIGHT_BITS = 5;
 constexpr int32_t PERCEPTRON_MIN_WEIGHT = -( 1 << (PERCEPTRON_WEIGHT_BITS - 1) );
@@ -181,6 +183,16 @@ struct METADATA_ENTRY
         valid = false;
         tag = 0;
         useful = false;
+
+		ind_physical_address = 0;
+		ind_cache_line = 0;
+		ind_page_address = 0;
+		ind_pc_xor_depth = 0;
+		ind_pc_hash = 0;
+		ind_pc_xor_delta = 0;
+		ind_confidence = 0;
+		ind_page_address_xor_confidence = 0;
+		ind_curr_sig_xor_delta = 0;
     }
 };
 
@@ -271,8 +283,8 @@ public:
 	METADATA_ENTRY create_metadata(uint64_t v_pc, uint64_t v_physical_address, uint64_t v_curr_sig, uint64_t v_pc_hash,
 						 			uint64_t v_delta, uint64_t v_confidence, uint64_t v_depth) {
 
-		uint64_t v_page = physical_address >> LOG2_PAGE_SIZE;
-		uint64_t v_cache_line = physical_address >> LOG2_BLOCK_SIZE;
+		uint64_t v_page = v_physical_address >> LOG2_PAGE_SIZE;
+		uint64_t v_cache_line = v_physical_address >> LOG2_BLOCK_SIZE;
 
 		METADATA_ENTRY metadata;
 		metadata.ind_physical_address = get_hash(v_physical_address) % physical_address.size();
@@ -291,8 +303,8 @@ public:
 	// Called every time something is demanded, or something is evicted
 	// hit_or_evict is true for hit, false for evict
 	void feedback_update(uint64_t addr, bool hit_or_evict) {
-		uint64_t cache_line = addr >> LOG2_BLOCK_SIZE;
-		uint64_t hash = get_hash(cache_line);
+		uint64_t v_cache_line = addr >> LOG2_BLOCK_SIZE;
+		uint64_t hash = get_hash(v_cache_line);
 		uint64_t quotient = (hash >> REMAINDER_BIT) & ((1 << QUOTIENT_BIT) - 1);
 		uint64_t remainder = hash % (1 << REMAINDER_BIT);
 
@@ -317,6 +329,20 @@ public:
 				reject_entry.tag = 0;
 			}
 		}
+	}
+
+	void add_record(uint64_t addr, METADATA_ENTRY metadata, bool prefetched) {
+		uint64_t v_cache_line = addr >> LOG2_BLOCK_SIZE;
+		uint64_t hash = get_hash(v_cache_line);
+		uint64_t quotient = (hash >> REMAINDER_BIT) & ((1 << QUOTIENT_BIT) - 1);
+		uint64_t remainder = hash % (1 << REMAINDER_BIT);
+
+		metadata.tag = remainder;
+		metadata.valid = true;
+		metadata.useful = false;
+
+		if(prefetched) prefetch_table[quotient] = metadata;
+		else reject_table[quotient] = metadata;
 	}
 };
 

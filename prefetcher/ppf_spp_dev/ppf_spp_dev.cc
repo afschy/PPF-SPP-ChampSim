@@ -12,6 +12,8 @@ spp::PATTERN_TABLE PT;
 spp::PREFETCH_FILTER FILTER;
 spp::GLOBAL_REGISTER GHR;
 spp::PPF_MODULE PPF;
+
+uint64_t ip1 = 0, ip2 = 0, ip3 = 0;
 } // namespace
 
 void CACHE::prefetcher_initialize()
@@ -56,6 +58,11 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
         std::cout << " page: " << page << " page_offset: " << std::dec << page_offset << std::endl;
     }
 
+    // Update ip
+    ip3 = ip2;
+    ip2 = ip1;
+    ip1 = ip;
+
     // Stage 1: Read and update a sig stored in ST
     // last_sig and delta are used to update (sig, delta) correlation in PT
     // curr_sig is used to read prefetch candidates in PT
@@ -74,23 +81,31 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
     // Stage 3: Start prefetching
     uint64_t base_addr = addr;
     uint32_t lookahead_conf = 100, pf_q_head = 0, pf_q_tail = 0;
-    uint8_t do_lookahead = 0;
+    bool do_lookahead = false;
 
     do {
         uint32_t lookahead_way = spp::PT_WAY;
         ::PT.read_pattern(curr_sig, delta_q, confidence_q, lookahead_way, lookahead_conf, pf_q_tail, depth);
 
-        do_lookahead = 0;
+        do_lookahead = false;
         for (uint32_t i = pf_q_head; i < pf_q_tail; i++) {
-            if(confidence_q[i] < spp::PF_THRESHOLD) continue;
-
+            // if(confidence_q[i] < spp::PF_THRESHOLD) continue;
+            spp::METADATA_ENTRY data_record = ::PPF.create_metadata(ip, addr, curr_sig, ip1^(ip2>>1)^(ip3>>2), delta_q[i], confidence_q[i], depth);
+            int ppf_sum = ::PPF.get_sum(data_record);
             uint64_t pf_addr = (base_addr & ~(BLOCK_SIZE - 1)) + (delta_q[i] << LOG2_BLOCK_SIZE);
 
-            if ((addr & ~(PAGE_SIZE - 1)) == (pf_addr & ~(PAGE_SIZE - 1))) { // Prefetch request is in the same physical page
-                if (::FILTER.check(pf_addr, ((confidence_q[i] >= spp::FILL_THRESHOLD) ? spp::SPP_L2C_PREFETCH : spp::SPP_LLC_PREFETCH))) {
-                    prefetch_line(pf_addr, (confidence_q[i] >= spp::FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            if(ppf_sum <= spp::PPF_T_LO) {
+                ::PPF.add_record(pf_addr, data_record, false);
+                continue;
+            }
 
-                    if (confidence_q[i] >= spp::FILL_THRESHOLD) {
+            if ((addr & ~(PAGE_SIZE - 1)) == (pf_addr & ~(PAGE_SIZE - 1))) { // Prefetch request is in the same physical page
+                if (::FILTER.check(pf_addr, ((ppf_sum >= spp::PPF_T_HI) ? spp::SPP_L2C_PREFETCH : spp::SPP_LLC_PREFETCH))) {
+                    
+                    prefetch_line(pf_addr, (ppf_sum >= spp::PPF_T_HI), 0); // Use addr (not base_addr) to obey the same physical page boundary
+                    ::PPF.add_record(pf_addr, data_record, true);
+
+                    if (ppf_sum >= spp::PPF_T_HI) {
                         ::GHR.pf_issued++;
                         if (::GHR.pf_issued > spp::GLOBAL_COUNTER_MAX) {
                             ::GHR.pf_issued >>= 1;
@@ -117,7 +132,7 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
                 }
             }
 
-            do_lookahead = 1;
+            do_lookahead = true;
             pf_q_head++;
         }
 
@@ -140,6 +155,9 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
             std::cout << "Looping curr_sig: " << std::hex << curr_sig << " base_addr: " << base_addr << std::dec;
             std::cout << " pf_q_head: " << pf_q_head << " pf_q_tail: " << pf_q_tail << " depth: " << depth << std::endl;
         }
+
+        if(depth >= spp::MAX_SPECULATION_DEPTH)
+            do_lookahead = false;
     } while (spp::LOOKAHEAD_ON && do_lookahead);
 
     return metadata_in;
@@ -375,36 +393,29 @@ void spp::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<int>& delta
         local_conf = (100 * c_delta[set][way]) / c_sig[set];
         pf_conf = depth ? (::GHR.global_accuracy * c_delta[set][way] / c_sig[set] * lookahead_conf / 100) : local_conf;
 
-        if (pf_conf >= PF_THRESHOLD) {
-            confidence_q[pf_q_tail] = pf_conf;
-            delta_q[pf_q_tail] = delta[set][way];
+        // if (pf_conf >= PF_THRESHOLD) {
+        confidence_q[pf_q_tail] = pf_conf;
+        delta_q[pf_q_tail] = delta[set][way];
 
-            // Lookahead path follows the most confident entry
-            if (pf_conf > max_conf) {
-                lookahead_way = way;
-                max_conf = pf_conf;
-            }
-            pf_q_tail++;
+        // Lookahead path follows the most confident entry
+        if (pf_conf > max_conf) {
+            lookahead_way = way;
+            max_conf = pf_conf;
+        }
+        pf_q_tail++;
 
-            if constexpr (spp::SPP_DEBUG_PRINT) {
-                std::cout << "[PT] " << __func__ << " HIGH CONF: " << pf_conf << " sig: " << std::hex << curr_sig << std::dec << " set: " << set << " way: " << way;
-                std::cout << " delta: " << delta[set][way] << " c_delta: " << c_delta[set][way] << " c_sig: " << c_sig[set];
-                std::cout << " conf: " << local_conf << " depth: " << depth << std::endl;
-            }
+        if constexpr (spp::SPP_DEBUG_PRINT) {
+            std::cout << "[PT] " << __func__ << " HIGH CONF: " << pf_conf << " sig: " << std::hex << curr_sig << std::dec << " set: " << set << " way: " << way;
+            std::cout << " delta: " << delta[set][way] << " c_delta: " << c_delta[set][way] << " c_sig: " << c_sig[set];
+            std::cout << " conf: " << local_conf << " depth: " << depth << std::endl;
         }
-        else {
-            if constexpr (spp::SPP_DEBUG_PRINT) {
-                std::cout << "[PT] " << __func__ << "    LOW CONF: " << pf_conf << " sig: " << std::hex << curr_sig << std::dec << " set: " << set << " way: " << way;
-                std::cout << " delta: " << delta[set][way] << " c_delta: " << c_delta[set][way] << " c_sig: " << c_sig[set];
-                std::cout << " conf: " << local_conf << " depth: " << depth << std::endl;
-            }
-        }
+        // }
     }
     pf_q_tail++;
 
     lookahead_conf = max_conf;
-    if (lookahead_conf >= PF_THRESHOLD)
-        depth++;
+    // if (lookahead_conf >= PF_THRESHOLD)
+    depth++;
 
     if constexpr (spp::SPP_DEBUG_PRINT) {
         std::cout << "global_accuracy: " << ::GHR.global_accuracy << " lookahead_conf: " << lookahead_conf << std::endl;
