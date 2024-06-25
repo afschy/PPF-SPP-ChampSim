@@ -41,12 +41,12 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
 {
     uint64_t page = addr >> LOG2_PAGE_SIZE;
     uint32_t page_offset = (addr >> LOG2_BLOCK_SIZE) & (PAGE_SIZE / BLOCK_SIZE - 1), last_sig = 0, curr_sig = 0, depth = 0;
-    std::vector<uint32_t> confidence_q(MSHR_SIZE);
+    std::vector<uint32_t> confidence_q(128);
 
     int32_t delta = 0;
-    std::vector<int32_t> delta_q(MSHR_SIZE);
+    std::vector<int32_t> delta_q(128);
 
-    for (uint32_t i = 0; i < MSHR_SIZE; i++) {
+    for (uint32_t i = 0; i < 128; i++) {
         confidence_q[i] = 0;
         delta_q[i] = 0;
     }
@@ -443,7 +443,7 @@ bool spp::PREFETCH_FILTER::check(uint64_t check_addr, FILTER_REQUEST filter_requ
 
             return false; // False return indicates "Do not prefetch"
         } else {
-            valid[quotient] = 1;    // Mark as prefetched
+            valid[quotient] = 1;  // Mark as prefetched
             useful[quotient] = 0; // Reset useful bit
             remainder_tag[quotient] = remainder;
 
@@ -528,7 +528,7 @@ void spp::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t pf_confidence,
 
     for (uint32_t i = 0; i < MAX_GHR_ENTRY; i++) {
         // if (sig[i] == pf_sig) { // TODO: Which one is better and consistent?
-        //    If GHR already holds the same pf_sig, update the GHR entry with the latest info
+        //  If GHR already holds the same pf_sig, update the GHR entry with the latest info
         if (valid[i] && (offset[i] == pf_offset)) {
             // If GHR already holds the same pf_offset, update the GHR entry with the latest info
             sig[i] = pf_sig;

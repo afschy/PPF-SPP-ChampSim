@@ -46,12 +46,12 @@ constexpr uint32_t GLOBAL_COUNTER_MAX = ((1 << GLOBAL_COUNTER_BIT) - 1);
 constexpr std::size_t MAX_GHR_ENTRY = 8;
 
 // PPF parameters
-constexpr int32_t PPF_T_HI = 90;		// Send to L2C if higher, LLC if lower than this
-constexpr int32_t PPF_T_LO = -90;		// Reject if lower than this
+constexpr int32_t PPF_T_HI = 80;		// Send to L2C if higher, LLC if lower than this
+constexpr int32_t PPF_T_LO = -75;		// Reject if lower than this
 constexpr int32_t PPF_THETA_P = 108;	// Retrain on hit if lower than this
 constexpr int32_t PPF_THETA_N = -108;	// Retrain on miss if higher than this
 
-constexpr uint8_t MAX_SPECULATION_DEPTH = 20;
+constexpr uint8_t MAX_SPECULATION_DEPTH = 26;
 
 constexpr unsigned PERCEPTRON_WEIGHT_BITS = 5;
 constexpr int32_t PERCEPTRON_MIN_WEIGHT = -( 1 << (PERCEPTRON_WEIGHT_BITS - 1) );
@@ -216,6 +216,7 @@ public:
 	std::vector<METADATA_ENTRY> reject_table;
 
 	PPF_MODULE() {
+		// All sizes MUST be a power of 2
 		physical_address.resize(4096); std::fill(physical_address.begin(), physical_address.end(), 0);
 		cache_line.resize(4096); std::fill(cache_line.begin(), cache_line.end(), 0);
 		page_address.resize(4096); std::fill(page_address.begin(), page_address.end(), 0);
@@ -285,17 +286,18 @@ public:
 
 		uint64_t v_page = v_physical_address >> LOG2_PAGE_SIZE;
 		uint64_t v_cache_line = v_physical_address >> LOG2_BLOCK_SIZE;
+		v_physical_address = v_physical_address & ((1 << 12) - 1);
 
 		METADATA_ENTRY metadata;
-		metadata.ind_physical_address = get_hash(v_physical_address) % physical_address.size();
-		metadata.ind_cache_line = get_hash(v_cache_line) % cache_line.size();
-		metadata.ind_page_address = get_hash(v_page) % page_address.size();
-		metadata.ind_pc_xor_depth = get_hash(v_pc ^ v_depth) % pc_xor_depth.size();
-		metadata.ind_pc_hash = get_hash(v_pc_hash) % pc_hash.size();
-		metadata.ind_pc_xor_delta = get_hash(v_pc ^ v_delta) % pc_xor_delta.size();
-		metadata.ind_confidence = get_hash(v_confidence) % confidence.size();
-		metadata.ind_page_address_xor_confidence = get_hash(v_page ^ v_confidence) % page_address_xor_confidence.size();
-		metadata.ind_curr_sig_xor_delta = get_hash(v_curr_sig ^ v_delta) % curr_sig_xor_delta.size();
+		metadata.ind_physical_address = get_hash(v_physical_address) & (physical_address.size() - 1);
+		metadata.ind_cache_line = get_hash(v_cache_line) & (cache_line.size() - 1);
+		metadata.ind_page_address = get_hash(v_page) & (page_address.size() - 1);
+		metadata.ind_pc_xor_depth = get_hash(v_pc ^ v_depth) & (pc_xor_depth.size() - 1);
+		metadata.ind_pc_hash = get_hash(v_pc_hash) & (pc_hash.size() - 1);
+		metadata.ind_pc_xor_delta = get_hash(v_pc ^ v_delta) & (pc_xor_delta.size() - 1);
+		metadata.ind_confidence = get_hash(v_confidence) & (confidence.size() - 1);
+		metadata.ind_page_address_xor_confidence = get_hash(v_page ^ v_confidence) & (page_address_xor_confidence.size() - 1);
+		metadata.ind_curr_sig_xor_delta = get_hash(v_curr_sig ^ v_delta) & (curr_sig_xor_delta.size() - 1);
 
 		return metadata;
 	}
@@ -306,28 +308,30 @@ public:
 		uint64_t v_cache_line = addr >> LOG2_BLOCK_SIZE;
 		uint64_t hash = get_hash(v_cache_line);
 		uint64_t quotient = (hash >> REMAINDER_BIT) & ((1 << QUOTIENT_BIT) - 1);
-		uint64_t remainder = hash % (1 << REMAINDER_BIT);
+		uint64_t remainder = hash & ((1 << REMAINDER_BIT) - 1);
 
 		METADATA_ENTRY& prefetch_entry = prefetch_table[quotient];
 		METADATA_ENTRY& reject_entry = reject_table[quotient];
 
 		if(hit_or_evict) {
-			if(prefetch_entry.valid && prefetch_entry.tag == remainder)
-				retrain(true, prefetch_entry);
-			if(reject_entry.valid && reject_entry.tag == remainder)
-				retrain(true, reject_entry);
-		}
-		else {
+			// On hit
 			if(prefetch_entry.valid && prefetch_entry.tag == remainder) {
-				retrain(false, prefetch_entry);
-				prefetch_entry.valid = false;
-				prefetch_entry.tag = 0;
+				retrain(true, prefetch_entry);
+				prefetch_entry.useful = true;
 			}
 			if(reject_entry.valid && reject_entry.tag == remainder) {
-				retrain(false, reject_entry);
-				reject_entry.valid = false;
-				reject_entry.tag = 0;
+				retrain(true, reject_entry);
+				reject_entry.useful = true;
 			}
+			return;
+		}
+
+		// On evict
+		if(prefetch_entry.valid && prefetch_entry.tag == remainder) {
+			if(prefetch_entry.useful == false) 
+				retrain(false, prefetch_entry);
+			prefetch_entry.valid = false;
+			prefetch_entry.tag = 0;
 		}
 	}
 
@@ -335,7 +339,7 @@ public:
 		uint64_t v_cache_line = addr >> LOG2_BLOCK_SIZE;
 		uint64_t hash = get_hash(v_cache_line);
 		uint64_t quotient = (hash >> REMAINDER_BIT) & ((1 << QUOTIENT_BIT) - 1);
-		uint64_t remainder = hash % (1 << REMAINDER_BIT);
+		uint64_t remainder = hash & ((1 << REMAINDER_BIT) - 1);
 
 		metadata.tag = remainder;
 		metadata.valid = true;

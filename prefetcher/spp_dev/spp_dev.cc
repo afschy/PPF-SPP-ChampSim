@@ -38,12 +38,12 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
 {
   uint64_t page = addr >> LOG2_PAGE_SIZE;
   uint32_t page_offset = (addr >> LOG2_BLOCK_SIZE) & (PAGE_SIZE / BLOCK_SIZE - 1), last_sig = 0, curr_sig = 0, depth = 0;
-  std::vector<uint32_t> confidence_q(MSHR_SIZE);
+  std::vector<uint32_t> confidence_q(128);
 
   int32_t delta = 0;
-  std::vector<int32_t> delta_q(MSHR_SIZE);
+  std::vector<int32_t> delta_q(128);
 
-  for (uint32_t i = 0; i < MSHR_SIZE; i++) {
+  for (uint32_t i = 0; i < 128; i++) {
     confidence_q[i] = 0;
     delta_q[i] = 0;
   }

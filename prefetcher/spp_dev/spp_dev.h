@@ -11,7 +11,7 @@ constexpr bool LOOKAHEAD_ON = true;
 constexpr bool FILTER_ON = true;
 constexpr bool GHR_ON = true;
 constexpr bool SPP_SANITY_CHECK = true;
-constexpr bool SPP_DEBUG_PRINT = true;
+constexpr bool SPP_DEBUG_PRINT = false;
 
 // Signature table parameters
 constexpr std::size_t ST_SET = 1;
