@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <fstream>
 
 #include "cache.h"
 
@@ -14,6 +15,8 @@ spp::GLOBAL_REGISTER GHR;
 spp::PPF_MODULE PPF;
 
 uint64_t ip1 = 0, ip2 = 0, ip3 = 0;
+uint64_t total_depth = 0, total_count = 0;
+uint64_t l2c_count = 0, llc_count = 0, reject_count = 0;
 } // namespace
 
 void CACHE::prefetcher_initialize()
@@ -96,6 +99,7 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
 
             if(ppf_sum <= spp::PPF_T_LO) {
                 ::PPF.add_record(pf_addr, data_record, false);
+                reject_count++;
                 continue;
             }
 
@@ -104,6 +108,9 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
                     
                     prefetch_line(pf_addr, (ppf_sum >= spp::PPF_T_HI), 0); // Use addr (not base_addr) to obey the same physical page boundary
                     ::PPF.add_record(pf_addr, data_record, true);
+
+                    if(ppf_sum >= spp::PPF_T_HI) l2c_count++;
+                    else llc_count++;
 
                     if (ppf_sum >= spp::PPF_T_HI) {
                         ::GHR.pf_issued++;
@@ -160,6 +167,8 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
             do_lookahead = false;
     } while (spp::LOOKAHEAD_ON && do_lookahead);
 
+    total_depth += depth;
+    total_count++;
     return metadata_in;
 }
 
@@ -171,12 +180,30 @@ uint32_t CACHE::prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t matc
         }
         ::FILTER.check(evicted_addr, spp::L2C_EVICT);
     }
-    ::PPF.feedback_update(evicted_addr, false);
+    if(evicted_addr)
+        ::PPF.feedback_update(evicted_addr, false);
 
     return metadata_in;
 }
 
-void CACHE::prefetcher_final_stats() {}
+void CACHE::prefetcher_final_stats() {
+    std::cout << "Average Depth = " << (::total_count? (1.00 * ::total_depth / ::total_count) : 0) << "\n";
+    std::cout << "L2C Count = " << l2c_count << "\n";
+    std::cout << "LLC Count = " << llc_count << "\n";
+    std::cout << "Reject Count = " << reject_count << "\n";
+
+    if(spp::PPF_DEBUG_PRINT) {
+        std::ofstream outfile;
+        outfile.open("/mnt/ssd/A/Thesis/champsim_out/stats.txt");
+        for(int i=0; i<4096; i++) {
+            outfile << int(::PPF.physical_address[i]) << "\t" << int(::PPF.cache_line[i]) << "\t" << int(::PPF.page_address[i]) << "\t"
+            << int(::PPF.pc_xor_depth[i]) << "\t" << int(::PPF.pc_hash[i]) << "\t" << int(::PPF.pc_xor_delta[i]) << "\t" << 
+            int(::PPF.confidence[i]) << "\t" << int(::PPF.page_address_xor_confidence[i]) << "\t" << int(::PPF.curr_sig_xor_delta[i])
+            << "\n";
+        }
+        outfile.close();
+    }
+}
 
 namespace spp
 {

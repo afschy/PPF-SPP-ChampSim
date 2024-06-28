@@ -11,6 +11,8 @@ spp::SIGNATURE_TABLE ST;
 spp::PATTERN_TABLE PT;
 spp::PREFETCH_FILTER FILTER;
 spp::GLOBAL_REGISTER GHR;
+uint64_t total_depth = 0, total_count = 0;
+uint64_t l2c_count = 0, llc_count = 0;
 } // namespace
 
 void CACHE::prefetcher_initialize()
@@ -85,6 +87,9 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
           if (::FILTER.check(pf_addr, ((confidence_q[i] >= spp::FILL_THRESHOLD) ? spp::SPP_L2C_PREFETCH : spp::SPP_LLC_PREFETCH))) {
             prefetch_line(pf_addr, (confidence_q[i] >= spp::FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
 
+            if(confidence_q[i] >= spp::FILL_THRESHOLD) l2c_count++;
+            else llc_count++;
+
             if (confidence_q[i] >= spp::FILL_THRESHOLD) {
               ::GHR.pf_issued++;
               if (::GHR.pf_issued > spp::GLOBAL_COUNTER_MAX) {
@@ -137,6 +142,8 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
     }
   } while (spp::LOOKAHEAD_ON && do_lookahead);
 
+  ::total_depth += depth;
+  ::total_count++;
   return metadata_in;
 }
 
@@ -152,7 +159,11 @@ uint32_t CACHE::prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t matc
   return metadata_in;
 }
 
-void CACHE::prefetcher_final_stats() {}
+void CACHE::prefetcher_final_stats() {
+  std::cout << "L2C Count = " << l2c_count << "\n";
+  std::cout << "LLC Count = " << llc_count << "\n";
+  std::cout << "Average Depth = " << (::total_count? (1.00 * ::total_depth / ::total_count) : 0) << "\n";
+}
 
 namespace spp
 {

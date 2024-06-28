@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <random>
 #include "cache.h"
 
 namespace spp
@@ -47,9 +48,10 @@ constexpr std::size_t MAX_GHR_ENTRY = 8;
 
 // PPF parameters
 constexpr int32_t PPF_T_HI = 80;		// Send to L2C if higher, LLC if lower than this
-constexpr int32_t PPF_T_LO = -75;		// Reject if lower than this
+constexpr int32_t PPF_T_LO = -100;		// Reject if lower than this
 constexpr int32_t PPF_THETA_P = 108;	// Retrain on hit if lower than this
-constexpr int32_t PPF_THETA_N = -108;	// Retrain on miss if higher than this
+constexpr int32_t PPF_THETA_N = -110;	// Retrain on miss if higher than this
+constexpr int32_t PPF_INIT_VAL = -16;	// Initial value of perceptron weights
 
 constexpr uint8_t MAX_SPECULATION_DEPTH = 26;
 
@@ -57,6 +59,8 @@ constexpr unsigned PERCEPTRON_WEIGHT_BITS = 5;
 constexpr int32_t PERCEPTRON_MIN_WEIGHT = -( 1 << (PERCEPTRON_WEIGHT_BITS - 1) );
 constexpr int32_t PERCEPTRON_MAX_WEIGHT = ( 1 << (PERCEPTRON_WEIGHT_BITS - 1) ) - 1;
 constexpr uint8_t PPF_TRAINING_DELTA = 1;
+
+constexpr bool PPF_DEBUG_PRINT = true;
 
 enum FILTER_REQUEST { SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT }; // Request type for prefetch filter
 uint64_t get_hash(uint64_t key);
@@ -217,18 +221,28 @@ public:
 
 	PPF_MODULE() {
 		// All sizes MUST be a power of 2
-		physical_address.resize(4096); std::fill(physical_address.begin(), physical_address.end(), 0);
-		cache_line.resize(4096); std::fill(cache_line.begin(), cache_line.end(), 0);
-		page_address.resize(4096); std::fill(page_address.begin(), page_address.end(), 0);
-		pc_xor_depth.resize(4096); std::fill(pc_xor_depth.begin(), pc_xor_depth.end(), 0);
-		pc_hash.resize(4096); std::fill(pc_hash.begin(), pc_hash.end(), 0);
-		pc_xor_delta.resize(4096); std::fill(pc_xor_delta.begin(), pc_xor_delta.end(), 0);
-		confidence.resize(4096); std::fill(confidence.begin(), confidence.end(), 0);
-		page_address_xor_confidence.resize(4096); std::fill(page_address_xor_confidence.begin(), page_address_xor_confidence.end(), 0);
-		curr_sig_xor_delta.resize(4096); std::fill(curr_sig_xor_delta.begin(), curr_sig_xor_delta.end(), 0);
+		physical_address.resize(4096); // std::fill(physical_address.begin(), physical_address.end(), PPF_INIT_VAL);
+		cache_line.resize(4096); // std::fill(cache_line.begin(), cache_line.end(), PPF_INIT_VAL);
+		page_address.resize(4096); // std::fill(page_address.begin(), page_address.end(), PPF_INIT_VAL);
+		pc_xor_depth.resize(4096); // std::fill(pc_xor_depth.begin(), pc_xor_depth.end(), PPF_INIT_VAL);
+		pc_hash.resize(4096); // std::fill(pc_hash.begin(), pc_hash.end(), PPF_INIT_VAL);
+		pc_xor_delta.resize(4096); // std::fill(pc_xor_delta.begin(), pc_xor_delta.end(), PPF_INIT_VAL);
+		confidence.resize(4096); // std::fill(confidence.begin(), confidence.end(), PPF_INIT_VAL);
+		page_address_xor_confidence.resize(4096); // std::fill(page_address_xor_confidence.begin(), page_address_xor_confidence.end(), PPF_INIT_VAL);
+		curr_sig_xor_delta.resize(4096); // std::fill(curr_sig_xor_delta.begin(), curr_sig_xor_delta.end(), PPF_INIT_VAL);
 
 		prefetch_table.resize(FILTER_SET);
 		reject_table.resize(FILTER_SET);
+
+		for(int i=0; i<(int)physical_address.size(); i++) physical_address[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)cache_line.size(); i++) cache_line[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)page_address.size(); i++) page_address[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)pc_xor_depth.size(); i++) pc_xor_depth[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)pc_hash.size(); i++) pc_hash[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)pc_xor_delta.size(); i++) pc_xor_delta[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)confidence.size(); i++) confidence[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)page_address_xor_confidence.size(); i++) page_address_xor_confidence[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
+		for(int i=0; i<(int)curr_sig_xor_delta.size(); i++) curr_sig_xor_delta[i] = PERCEPTRON_MIN_WEIGHT + rand() % (PERCEPTRON_MAX_WEIGHT - PERCEPTRON_MIN_WEIGHT + 1);
 	}
 
 	inline void bounded_increment(std::vector<int8_t>& vec, const uint16_t ind) {
@@ -328,11 +342,13 @@ public:
 
 		// On evict
 		if(prefetch_entry.valid && prefetch_entry.tag == remainder) {
-			if(prefetch_entry.useful == false) 
-				retrain(false, prefetch_entry);
+			// if(!prefetch_entry.useful) 
+			retrain(false, prefetch_entry);
 			prefetch_entry.valid = false;
 			prefetch_entry.tag = 0;
 		}
+		if(reject_entry.valid && reject_entry.tag == remainder)
+			retrain(false, reject_entry);
 	}
 
 	void add_record(uint64_t addr, METADATA_ENTRY metadata, bool prefetched) {

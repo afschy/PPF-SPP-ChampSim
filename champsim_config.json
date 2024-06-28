@@ -1,5 +1,5 @@
 {
-    "executable_name": "champsim",
+    "executable_name": "ppf",
     "block_size": 64,
     "page_size": 4096,
     "heartbeat_frequency": 10000000,
@@ -18,9 +18,6 @@
         "ways": 8,
         "mshr_size": 8,
         "latency": 4,
-        "prefetch_as_load": false,
-        "virtual_prefetch": false,
-        "prefetch_activate": "LOAD,PREFETCH",
         "prefetcher": "no",
         "replacement": "lru"
     },
@@ -32,7 +29,7 @@
         "latency": 8,
         "prefetch_as_load": false,
         "virtual_prefetch": false,
-        "prefetch_activate": "LOAD,PREFETCH",
+        "prefetch_activate": "LOAD",
         "prefetcher": "ppf_spp_dev",
         "replacement": "lru"
     },
@@ -43,9 +40,6 @@
         "ways": 16,
         "mshr_size": 32,
         "latency": 12,
-        "prefetch_as_load": false,
-        "virtual_prefetch": false,
-        "prefetch_activate": "LOAD,PREFETCH",
         "prefetcher": "no",
         "replacement": "lru"
     },

@@ -77,6 +77,9 @@
         "typeinfo": "cpp",
         "valarray": "cpp",
         "variant": "cpp",
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "csignal": "cpp",
+        "ranges": "cpp",
+        "typeindex": "cpp"
     }
 }
