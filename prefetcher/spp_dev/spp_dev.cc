@@ -40,12 +40,12 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
 {
   uint64_t page = addr >> LOG2_PAGE_SIZE;
   uint32_t page_offset = (addr >> LOG2_BLOCK_SIZE) & (PAGE_SIZE / BLOCK_SIZE - 1), last_sig = 0, curr_sig = 0, depth = 0;
-  std::vector<uint32_t> confidence_q(128);
+  std::vector<uint32_t> confidence_q(100*MSHR_SIZE);
 
   int32_t delta = 0;
-  std::vector<int32_t> delta_q(128);
+  std::vector<int32_t> delta_q(100*MSHR_SIZE);
 
-  for (uint32_t i = 0; i < 128; i++) {
+  for (uint32_t i = 0; i < 100*MSHR_SIZE; i++) {
     confidence_q[i] = 0;
     delta_q[i] = 0;
   }
@@ -197,7 +197,7 @@ void spp::SIGNATURE_TABLE::read_and_update_sig(uint64_t page, uint32_t page_offs
     std::cout << "[ST] " << __func__ << " page: " << std::hex << page << " partial_page: " << partial_page << std::dec << std::endl;
   }
 
-  // Case 2: Invalid
+  // Case 1: Hit
   if (match == ST_WAY) {
     for (match = 0; match < ST_WAY; match++) {
       if (valid[set][match] && (tag[set][match] == partial_page)) {
