@@ -80,6 +80,10 @@
         "*.inc": "cpp",
         "csignal": "cpp",
         "ranges": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "coroutine": "cpp",
+        "expected": "cpp",
+        "source_location": "cpp",
+        "shared_mutex": "cpp"
     }
 }
