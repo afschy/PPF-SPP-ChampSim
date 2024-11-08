@@ -77,7 +77,7 @@ using std::vector;
 #define FIRST_LAYER_SIZE 20
 #define LAST_LAYER_SIZE 2
 #define LEARN_RATE 0.2
-#define LLC_DELTA -0.5
+#define LLC_DELTA -0.3
 #define L2C_DELTA 0.0
 
 enum FILTER_REQUEST { SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT, SPP_PERC_REJECT}; // Request type for prefetch filter
@@ -387,6 +387,13 @@ public:
             dw[i].resize(input_count);
         }
 
+        for(int out=0; out < output_count; out++) {
+            for(int in=0; in < input_count; in++) {
+                w[out][in] = 1.00 * rand() / RAND_MAX;
+                w[out][in] *= sqrt(2.0 / input_count);
+            }
+        }
+
         b.resize(output_count);
         db.resize(output_count);
 
@@ -552,6 +559,90 @@ public:
             first_layer_outputs[i] = sigmoid(first_layer_outputs[i]);
 
         return softmax(this->forward(first_layer_outputs));
+    }
+};
+
+class NN_2
+{
+public:
+    // CONST depths for different features
+    int32_t PERC_DEPTH[PERC_FEATURES];
+
+    vector<int> layer_size_list;
+    vector<NN_LAYER> layers;
+
+    NN_2(const vector<int>& layer_size_list)
+    {
+        PERC_DEPTH[0] = 2048; //base_addr;
+        PERC_DEPTH[1] = 4096; //cache_line;
+        PERC_DEPTH[2] = 4096; //page_addr;
+        PERC_DEPTH[3] = 4096; //confidence ^ page_addr;
+        PERC_DEPTH[4] = 1024; //curr_sig ^ sig_delta;
+        PERC_DEPTH[5] = 4096; //ip_1 ^ ip_2 ^ ip_3;		
+        PERC_DEPTH[6] = 1024; //ip ^ depth;
+        PERC_DEPTH[7] = 2048; //ip ^ sig_delta;
+        PERC_DEPTH[8] = 128;  //confidence;
+        
+        this->layer_size_list = layer_size_list;
+        layers.push_back( NN_LAYER(PERC_FEATURES, layer_size_list[0]) );
+        for(int i=1; i<layer_size_list.size(); i++)
+            layers.push_back( NN_LAYER(layer_size_list[i-1], layer_size_list[i]) );
+    }
+
+    vector<double> forward(const vector<double>& x_in)
+    {
+        assert(x_in.size() == layers[0].input_count && "input size mismatch at NN.forward\n");
+        vector<double> curr = x_in;
+        for(int i=0; i<layers.size(); i++)
+            curr = layers[i].forward(curr);
+        return curr;
+    }
+
+    vector<double> backward(const vector<double>& nodeval_out)
+    {
+        assert(nodeval_out.size() == layers[layers.size()-1].output_count && "output error size mismatch at NN.backward\n");
+        vector<double> curr = nodeval_out;
+        for(int i=layers.size()-1; i>=0; i--)
+            curr = layers[i].backward(curr);
+        return curr;
+    }
+
+    void nn_update(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_2, uint64_t ip_3, int32_t cur_delta, uint32_t last_sig, uint32_t curr_sig, uint32_t confidence, uint32_t depth, bool should_have_prefetched)
+    {
+        uint64_t perc_set[PERC_FEATURES];
+        // Get the perceptron indexes
+        get_perc_index(base_addr, ip, ip_1, ip_2, ip_3, cur_delta, last_sig, curr_sig, confidence, depth, perc_set);
+        
+        vector<double> input(PERC_FEATURES);
+        for(int i=0; i<PERC_FEATURES; i++)
+            input[i] = 1.00 * perc_set[i] / PERC_DEPTH[i];
+
+        vector<double> expected_result({0.0, 0.0});
+        if(should_have_prefetched) expected_result[1] = 1;
+        else expected_result[0] = 1;
+
+        vector<double> predicted_result = this->nn_predict(base_addr, ip, ip_1, ip_2, ip_3, cur_delta, last_sig, curr_sig, confidence, depth);
+        vector<double> output_error(2);
+        output_error[0] = predicted_result[0] - expected_result[0];
+        output_error[1] = predicted_result[1] - expected_result[1];
+
+        this->backward(output_error);
+    }
+    
+    // Returns a vector of two values
+    // result[0]: likelihood of rejecting
+    // result[1]: likelihood of accepting
+    vector<double> nn_predict(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_2, uint64_t ip_3, int32_t cur_delta, uint32_t last_sig, uint32_t curr_sig, uint32_t confidence, uint32_t depth)
+    {
+        uint64_t perc_set[PERC_FEATURES];
+        // Get the indexes in perc_set[]
+        get_perc_index(base_addr, ip, ip_1, ip_2, ip_3, cur_delta, last_sig, curr_sig, confidence, depth, perc_set);
+
+        vector<double> input(PERC_FEATURES);
+        for(int i=0; i<PERC_FEATURES; i++)
+            input[i] = 1.00 * perc_set[i] / PERC_DEPTH[i];
+
+        return softmax(this->forward(input));
     }
 };
 
