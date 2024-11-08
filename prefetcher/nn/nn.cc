@@ -7,13 +7,15 @@
 #include <cmath>
 #include <cassert>
 #include "cache.h"
-#include "ppf.h"
+#include "nn.h"
 
 SIGNATURE_TABLE ST;
 PATTERN_TABLE     PT;
 PREFETCH_FILTER FILTER;
 GLOBAL_REGISTER GHR;
-PERCEPTRON PERC;
+// PERCEPTRON PERC;
+vector<int> layer_size_list({FIRST_LAYER_SIZE, 10, LAST_LAYER_SIZE});
+NN NETWORK(layer_size_list);
 
 int depth_track[30];
 int prefetch_q_full;
@@ -114,20 +116,17 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
         for (uint32_t i = pf_q_head; i < pf_q_tail; i++) {
 
             uint64_t pf_addr = (base_addr & ~(BLOCK_SIZE - 1)) + (delta_q[i] << LOG2_BLOCK_SIZE);
-            int32_t perc_sum     = perc_sum_q[i];
+            int32_t perc_sum = perc_sum_q[i];
 
-            SPP_DP(
-                    std::cout << "[ChampSim] State of features: \nTrain addr: " << train_addr << "\tCurr IP: " << curr_ip << "\tIP_1: " << GHR.ip_1 << "\tIP_2: " << GHR.ip_2 << "\tIP_3: " << GHR.ip_3 << "\tDelta: " << train_delta + delta_q[i] << "\t:LastSig " << last_sig << "\t:CurrSig " << curr_sig << "\t:Conf " << confidence_q[i] << "\t:Depth " << depth << "\tSUM: "<< perc_sum    << std::endl;
-                    );
-            FILTER_REQUEST fill_level = (perc_sum >= PERC_THRESHOLD_HI) ? SPP_L2C_PREFETCH : SPP_LLC_PREFETCH;
+            FILTER_REQUEST fill_level = (perc_sum >= L2C_DELTA) ? SPP_L2C_PREFETCH : SPP_LLC_PREFETCH;
 
-            if ((addr & ~(PAGE_SIZE - 1)) == (pf_addr & ~(PAGE_SIZE - 1))) { // Prefetch request is in the same physical page
-
+            if ((addr & ~(PAGE_SIZE - 1)) == (pf_addr & ~(PAGE_SIZE - 1))) // Prefetch request is in the same physical page
+            { 
                 // Filter checks for redundancy and returns FALSE if redundant
                 // Else it returns TRUE and logs the features for future retrieval 
                 if ( num_pf < ceil(((get_pq_size()[0])/distinct_pages)) ) {			
-                    if (FILTER.check(pf_addr, train_addr, curr_ip, fill_level, train_delta + delta_q[i], last_sig, curr_sig, confidence_q[i], perc_sum, (depth-1))) {
-
+                    if (FILTER.check(pf_addr, train_addr, curr_ip, fill_level, train_delta + delta_q[i], last_sig, curr_sig, confidence_q[i], perc_sum, (depth-1)))
+                    {
                         // Histogramming Idea
                         int32_t perc_sum_shifted = perc_sum + (PERC_COUNTER_MAX+1)*PERC_FEATURES; 
                         int32_t hist_index = perc_sum_shifted / 10;
@@ -219,68 +218,7 @@ uint32_t CACHE::prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way,
     return metadata_in;
 }
 
-void CACHE::prefetcher_final_stats()
-{
-    SPP_DP (
-        // std::cout << "\nAvg Lookahead Depth:\t" << GHR.depth_sum / GHR.depth_num << std::endl; 
-        // std::cout << "TOTAL: " << GHR.pf_total << "\tL2C: " << GHR.pf_l2c << "\tLLC: " << GHR.pf_llc << "\tGOOD_L2C: " << GHR.pf_l2c_good << std::endl;
-        // std::cout << "PERC PASS: " << GHR.perc_pass << "\tPERC REJECT: " << GHR.perc_reject << "\tREJECT UPDATE: " << GHR.reject_update << std::endl;
-    );
-
-    SPP_PW (
-
-            ofstream myfile;
-            char fname[] =    "perc_weights_0.csv";
-            myfile.open(fname, std::ofstream::app);
-            std::cout << "Printing all the perceptron weights to: " << fname << std::endl;
-
-            std::string row = "base_addr,cache_line,page_addr,confidence^page_addr,curr_sig^sig_delta,ip_1^ip_2^ip_3,ip^depth,ip^sig_delta,confidence,\n"; 
-            for (int i = 0; i < PERC_ENTRIES; i++) {
-            //row = row + "Entry#: " + std::to_string(i) + ",";
-            for (int j = 0; j < PERC_FEATURES; j++) {
-            if (PERC.perc_touched[i][j]) {
-            row = row + std::to_string(PERC.perc_weights[i][j]) + ",";
-            }
-            else {
-            row = row + ",";
-            if (PERC.perc_weights[i][j] != 0) {
-            // Throw assertion if the weight is tagged as untouched and still non-zero 
-            //std::cout << "I:" << i << "\tJ: "<< j << "\tWeight: " << PERC.perc_weights[i][j] << std::endl;
-            //assert(0);
-            }
-            }
-            }
-            row = row + "\n";
-            }
-            myfile << row;
-            myfile.close();	
-            );
-
-            SPP_DP(
-                    /*
-                         std::cout << "\n\n****HISTOGRAMMING STATS****" << std::endl;
-                         std::cout << "\tIndex\t\t hist_tots \t\t hist_hits \t\t hist_ratio" << std::endl;
-                         for (int i = 0; i < 55; i++) {
-                         float hist_ratio = 0;
-                         if (FILTER.hist_tots[i] != 0)
-                         hist_ratio = FILTER.hist_hits[i] / FILTER.hist_tots[i];
-                         std::std::cout << std::setw(10) << i*10-(PERC_COUNTER_MAX+1)*PERC_FEATURES <<"     \t "<< std::setw(10) << int(FILTER.hist_tots[i]) <<" \t " << std::setw(10) << int(FILTER.hist_hits[i]) << " \t " << std::setw(10) << hist_ratio << std::std::endl;
-                         }
-                         */
-                    );
-
-            int tot = 0;
-            printf("------------------\n");
-            printf("Depth Distribution\n");
-            printf("------------------\n");
-            for(int a = 0; a < 30; a++){
-                printf("depth %d: %d\n", a, depth_track[a]);
-                tot += depth_track[a];
-            }
-            printf("Total: %d\n", tot);
-            printf("------------------\n");
-
-}
+void CACHE::prefetcher_final_stats() { }
 
 // TODO: Find a good 64-bit hash function
 uint64_t get_hash(uint64_t key)
@@ -490,9 +428,11 @@ void PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<int> &delta_q, s
             local_conf = (100 * c_delta[set][way]) / c_sig[set];
             pf_conf = depth ? (GHR.global_accuracy * c_delta[set][way] / c_sig[set] * lookahead_conf / 100) : local_conf;
 
-            int32_t perc_sum = PERC.perc_predict(train_addr, curr_ip, GHR.ip_1, GHR.ip_2, GHR.ip_3, train_delta + delta[set][way], last_sig, curr_sig, pf_conf, depth);
-            bool do_pf = (perc_sum >= PERC_THRESHOLD_LO) ? 1 : 0;
-            bool fill_l2 = (perc_sum >= PERC_THRESHOLD_HI) ? 1 : 0;
+            vector<double> prediction = NETWORK.nn_predict(train_addr, curr_ip, GHR.ip_1, GHR.ip_2, GHR.ip_3, train_delta + delta[set][way], last_sig, curr_sig, pf_conf, depth);
+            // printf("%lf, %lf\n\n", prediction[0], prediction[1]);
+            int32_t perc_sum = prediction[1] - prediction[0];
+            bool do_pf = (perc_sum >= LLC_DELTA) ? 1 : 0;
+            bool fill_l2 = (perc_sum >= L2C_DELTA) ? 1 : 0;
 
             if (fill_l2 && (mshr_occupancy >= mshr_size || pq_occupancy >= pq_SIZE) )
                 continue;
@@ -505,10 +445,6 @@ void PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<int> &delta_q, s
                 delta_q[pf_q_tail] = delta[set][way];
                 perc_sum_q[pf_q_tail] = perc_sum;
 
-                //std::cout << "WAY:    "<< way << "\tPF_CONF: " << pf_conf <<    "\tIndex: " << pf_q_tail << std::endl;
-                SPP_DP (
-                        std::cout << "[PT] State of Features: \nTrain addr: " << train_addr << "\tCurr IP: " << curr_ip << "\tIP_1: " << GHR.ip_1 << "\tIP_2: " << GHR.ip_2 << "\tIP_3: " << GHR.ip_3 << "\tDelta: " << train_delta + delta[set][way] << "\tLastSig: " << last_sig << "\tCurrSig: " << curr_sig << "\tConf: " << pf_conf << "\tDepth: " << depth << "\tSUM: "<< perc_sum    << std::endl;
-                        );
                 // Lookahead path follows the most confident entry
                 if (pf_conf > max_conf) {
                     lookahead_way = way;
@@ -531,8 +467,8 @@ void PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<int> &delta_q, s
             }
 
             // Recording Perc negatives
-            if (pf_conf && pf_q_tail < mshr_size && (perc_sum < PERC_THRESHOLD_HI) ) {
-                // Note: Using PERC_THRESHOLD_HI as the decising factor for negative case
+            if (pf_conf && pf_q_tail < mshr_size && (perc_sum < L2C_DELTA) ) {
+                // Note: Using L2C_DELTA as the decising factor for negative case
                 // Because 'trueness' of a prefetch is decisded based on the feedback from L2C
                 // So even though LLC prefetches go through, they are treated as false wrt L2C in this case
                 uint64_t pf_addr = (base_addr & ~(BLOCK_SIZE - 1)) + (delta[set][way] << LOG2_BLOCK_SIZE);
@@ -561,12 +497,6 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
     //REJECT FILTER
     uint64_t quotient_reject = (hash >> REMAINDER_BIT_REJ) & ((1 << QUOTIENT_BIT_REJ) - 1),
              remainder_reject = hash % (1 << REMAINDER_BIT_REJ);
-
-    SPP_DP (
-        std::cout << "[FILTER] check_addr: " << hex << check_addr << " check_cache_line: " << (check_addr >> LOG2_BLOCK_SIZE);
-        std::cout << " request type: " << filter_request;
-        std::cout << " hash: " << hash << dec << " quotient: " << quotient << " remainder: " << remainder << std::endl;
-    );
 
     switch (filter_request) {
 
@@ -599,19 +529,19 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
                 }
 
                 SPP_DP (
-                        std::cout << "[FILTER] " << __func__ << " PF rejected by perceptron. Set valid_reject for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                        std::cout << " quotient: " << quotient << " remainder_tag: " << remainder_tag_reject[quotient_reject] << std::endl; 
-                        std::cout << " More Recorded Metadata: Addr: " << hex << address_reject[quotient_reject] << dec << " PC: " << pc_reject[quotient_reject] << " Delta: " << delta_reject[quotient_reject] << " Last Signature: " << last_signature_reject[quotient_reject] << " Current Signature: " << cur_signature_reject[quotient_reject] << " Confidence: " << confidence_reject[quotient_reject] << std::endl;
-                        );
+                    std::cout << "[FILTER] " << __func__ << " PF rejected by perceptron. Set valid_reject for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
+                    std::cout << " quotient: " << quotient << " remainder_tag: " << remainder_tag_reject[quotient_reject] << std::endl; 
+                    std::cout << " More Recorded Metadata: Addr: " << hex << address_reject[quotient_reject] << dec << " PC: " << pc_reject[quotient_reject] << " Delta: " << delta_reject[quotient_reject] << " Last Signature: " << last_signature_reject[quotient_reject] << " Current Signature: " << cur_signature_reject[quotient_reject] << " Confidence: " << confidence_reject[quotient_reject] << std::endl;
+                );
             }
             break;
 
         case SPP_L2C_PREFETCH:
             if ((valid[quotient] || useful[quotient]) && remainder_tag[quotient] == remainder) { 
                 SPP_DP (
-                        std::cout << "[FILTER] " << __func__ << " line is already in the filter check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                        std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
-                        );
+                    std::cout << "[FILTER] " << __func__ << " line is already in the filter check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
+                    std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
+                );
 
                 return false; // False return indicates "Do not prefetch"
             }
@@ -645,9 +575,9 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
         case SPP_LLC_PREFETCH:
             if ((valid[quotient] || useful[quotient]) && remainder_tag[quotient] == remainder) { 
                 SPP_DP (
-                        std::cout << "[FILTER] " << __func__ << " line is already in the filter check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                        std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
-                        );
+                    std::cout << "[FILTER] " << __func__ << " line is already in the filter check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
+                    std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
+                );
 
                 return false; // False return indicates "Do not prefetch"
             } else {
@@ -658,9 +588,9 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
                 // To allow this fast prefetch from LLC, SPP does not set the valid bit for SPP_LLC_PREFETCH
 
                 SPP_DP (
-                        std::cout << "[FILTER] " << __func__ << " don't set valid for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                        std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
-                        );
+                    std::cout << "[FILTER] " << __func__ << " don't set valid for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
+                    std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
+                );
             }
             break;
 
@@ -673,17 +603,9 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
                     GHR.pf_l2c_good++;
                 }
 
-                SPP_DP (
-                    std::cout << "[FILTER] " << __func__ << " set useful for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                    std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient];
-                    std::cout << " GHR.pf_issued: " << GHR.pf_issued << " GHR.pf_useful: " << GHR.pf_useful << std::endl; 
-                    if (valid[quotient])
-                    std::cout << " Calling Perceptron Update (INC) as L2C_DEMAND was useful" << std::endl;
-                );
-
                 if (valid[quotient]) {
                     // Prefetch leads to a demand hit
-                    PERC.perc_update(address[quotient], pc[quotient], pc_1[quotient], pc_2[quotient], pc_3[quotient], delta[quotient], last_signature[quotient], cur_signature[quotient], confidence[quotient], la_depth[quotient], 1, perc_sum[quotient]);
+                    NETWORK.nn_update(address[quotient], pc[quotient], pc_1[quotient], pc_2[quotient], pc_3[quotient], delta[quotient], last_signature[quotient], cur_signature[quotient], confidence[quotient], la_depth[quotient], true);
 
                     // Histogramming Idea
                     int32_t perc_sum_shifted = perc_sum[quotient] + (PERC_COUNTER_MAX+1)*PERC_FEATURES; 
@@ -692,18 +614,15 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
                 }
             }
             //If NOT Prefetched
-            if (!(valid[quotient] && remainder_tag[quotient] == remainder)) {
+            if (!(valid[quotient] && remainder_tag[quotient] == remainder))
+            {
                 // AND If Rejected by Perc
-                if (valid_reject[quotient_reject] && remainder_tag_reject[quotient_reject] == remainder_reject) {
-                    SPP_DP (
-                            std::cout << "[FILTER] " << __func__ << " not doing anything for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                            std::cout << " quotient: " << quotient << " valid_reject:" << valid_reject[quotient_reject];
-                            std::cout << " GHR.pf_issued: " << GHR.pf_issued << " GHR.pf_useful: " << GHR.pf_useful << std::endl; 
-                            std::cout << " Calling Perceptron Update (DEC) as a useful L2C_DEMAND was rejected and reseting valid_reject" << std::endl;
-                            );
-                    if (train_neg) {
+                if (valid_reject[quotient_reject] && remainder_tag_reject[quotient_reject] == remainder_reject)
+                {
+                    if (train_neg)
+                    {
                         // Not prefetched but could have been a good idea to prefetch
-                        PERC.perc_update(address_reject[quotient_reject], pc_reject[quotient_reject], pc_1_reject[quotient_reject], pc_2_reject[quotient_reject], pc_3_reject[quotient_reject], delta_reject[quotient_reject], last_signature_reject[quotient_reject], cur_signature_reject[quotient_reject], confidence_reject[quotient_reject], la_depth_reject[quotient_reject], 0, perc_sum_reject[quotient_reject]);
+                        NETWORK.nn_update(address_reject[quotient_reject], pc_reject[quotient_reject], pc_1_reject[quotient_reject], pc_2_reject[quotient_reject], pc_3_reject[quotient_reject], delta_reject[quotient_reject], last_signature_reject[quotient_reject], cur_signature_reject[quotient_reject], confidence_reject[quotient_reject], la_depth_reject[quotient_reject], true);
                         valid_reject[quotient_reject] = 0;
                         remainder_tag_reject[quotient_reject] = 0;
                         // Printing Stats
@@ -719,15 +638,8 @@ bool PREFETCH_FILTER::check(uint64_t check_addr, uint64_t base_addr, uint64_t ip
                 if (GHR.pf_useful) 
                     GHR.pf_useful--;
 
-                SPP_DP (
-                        std::cout << "[FILTER] " << __func__ << " eviction for check_addr: " << hex << check_addr << " cache_line: " << cache_line << dec;
-                        std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient] << std::endl; 
-                        std::cout << " Calling Perceptron Update (DEC) as L2C_DEMAND was not useful" << std::endl;
-                        std::cout << " Reseting valid_reject" << std::endl;
-                        );
-
                 // Prefetch leads to eviction
-                PERC.perc_update(address[quotient], pc[quotient], pc_1[quotient], pc_2[quotient], pc_3[quotient], delta[quotient], last_signature[quotient], cur_signature[quotient], confidence[quotient], la_depth[quotient], 0, perc_sum[quotient]);
+                NETWORK.nn_update(address[quotient], pc[quotient], pc_1[quotient], pc_2[quotient], pc_3[quotient], delta[quotient], last_signature[quotient], cur_signature[quotient], confidence[quotient], la_depth[quotient], false);
             }
             // Reset filter entry
             valid[quotient] = 0;
@@ -899,7 +811,7 @@ void get_perc_index(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_
     pre_hash[8] = confidence;
 
     for (int i = 0; i < PERC_FEATURES; i++) {
-        perc_set[i] = (pre_hash[i]) % PERC.PERC_DEPTH[i]; // Variable depths
+        perc_set[i] = (pre_hash[i]) % NETWORK.PERC_DEPTH[i]; // Variable depths
         SPP_DP (
             std::cout << "    Perceptron Set Index#: " << i << " = " <<    perc_set[i];
         );

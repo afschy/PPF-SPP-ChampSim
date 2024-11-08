@@ -72,9 +72,13 @@ using std::vector;
 #define PERC_THRESHOLD_LO    -15
 #define POS_UPDT_THRESHOLD    90
 #define NEG_UPDT_THRESHOLD   -80
+
+// NN parameters
 #define FIRST_LAYER_SIZE 20
 #define LAST_LAYER_SIZE 2
-#define LEARN_RATE 0.01
+#define LEARN_RATE 0.2
+#define LLC_DELTA -0.5
+#define L2C_DELTA 0.0
 
 enum FILTER_REQUEST { SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT, SPP_PERC_REJECT}; // Request type for prefetch filter
 uint64_t get_hash(uint64_t key);
@@ -350,6 +354,8 @@ public:
 
 double relu(double x) { return std::max(0.0, x); }
 double d_relu(double x) { return (x > 0.0)? 1 : 0; }
+double sigmoid(double x) { return 1 / (1 + exp(-x)); }
+double d_sigmoid(double x) { return x * (1 - x); }
 
 vector<double> softmax(const vector<double>& vec) {
     vector<double> result(vec.size());
@@ -383,11 +389,14 @@ public:
 
         b.resize(output_count);
         db.resize(output_count);
+
+        a.resize(output_count);
+        x_in.resize(input_count);
     }
 
     vector<double> forward(const vector<double>& x_in)
     {
-        // x_in.size() == input_count
+        assert(x_in.size() == input_count && "input size mismatch at NN_LAYER.forward\n");
         this->x_in = x_in;
         vector<double> activations(output_count);
 
@@ -395,7 +404,7 @@ public:
             double weighted_input = b[node_out];
             for(int node_in=0; node_in < input_count; node_in++)
                 weighted_input += x_in[node_in] * w[node_out][node_in];
-            activations[node_out] = relu(weighted_input);
+            activations[node_out] = sigmoid(weighted_input);
         }
 
         this->a = activations;
@@ -405,27 +414,28 @@ public:
     vector<double> backward(const vector<double>& nodeval_next)
     {
         // nodeval_next.size() == nodeval_curr.size() == output_count
+        assert(nodeval_next.size() == output_count && "nodeval_next size mismatch at NN_LAYER.backward\n");
         vector<double> nodeval_curr = nodeval_next;
         for(int i=0; i<nodeval_curr.size(); i++)
-            nodeval_curr[i] *= d_relu(this->a[i]);
+            nodeval_curr[i] *= d_sigmoid(this->a[i]);
         
         vector<double> nodeval_prev(input_count);
 
-        for(int i=0; i<input_count; i++) {
-            nodeval_prev[i] = 0;
-            for(int j=0; j<output_count; j++)
-                nodeval_prev[i] += w[j][i] * nodeval_curr[j];
+        for(int out=0; out<input_count; out++) {
+            nodeval_prev[out] = 0;
+            for(int in=0; in<output_count; in++)
+                nodeval_prev[out] += w[in][out] * nodeval_curr[in];
         }
 
-        for(int i=0; i<output_count; i++)
-            for(int j=0; j<input_count; j++)
-                dw[i][j] = nodeval_curr[i] * x_in[j];
+        for(int out=0; out<output_count; out++)
+            for(int in=0; in<input_count; in++)
+                dw[out][in] = nodeval_curr[out] * x_in[in];
         db = nodeval_curr;
         
-        for(int i=0; i<output_count; i++) {
-            b[i] -= LEARN_RATE * db[i];
-            for(int j=0; j<input_count; j++)
-                w[i][j] -= LEARN_RATE * dw[i][j];
+        for(int out=0; out<output_count; out++) {
+            b[out] -= LEARN_RATE * db[out];
+            for(int in=0; in<input_count; in++)
+                w[out][in] -= LEARN_RATE * dw[out][in];
         }
 
         return nodeval_prev;
@@ -448,7 +458,6 @@ public:
 
     vector<int> layer_size_list;
     vector<NN_LAYER> layers;
-    
 
     NN(const vector<int>& layer_size_list)
     {
@@ -468,7 +477,8 @@ public:
         for(int k=0; k < FIRST_LAYER_SIZE; k++) {
             for (int i = 0; i < PERC_ENTRIES; i++) {
                 for (int j = 0;j < PERC_FEATURES; j++) {
-                    perc_weights[k][i][j] = 0;
+                    perc_weights[k][i][j] = 1.00 * rand() / RAND_MAX;
+                    perc_weights[k][i][j] *= sqrt(2.0 / PERC_FEATURES);
                     perc_touched[k][i][j] = 0;
                 }
             }
@@ -481,7 +491,7 @@ public:
 
     vector<double> forward(const vector<double>& x_in)
     {
-        // x_in.size() == layer[0].input_count
+        assert(x_in.size() == layers[0].input_count && "input size mismatch at NN.forward\n");
         vector<double> curr = x_in;
         for(int i=0; i<layers.size(); i++)
             curr = layers[i].forward(curr);
@@ -490,6 +500,7 @@ public:
 
     vector<double> backward(const vector<double>& nodeval_out)
     {
+        assert(nodeval_out.size() == layers[layers.size()-1].output_count && "output error size mismatch at NN.backward\n");
         vector<double> curr = nodeval_out;
         for(int i=layers.size()-1; i>=0; i--)
             curr = layers[i].backward(curr);
@@ -513,7 +524,7 @@ public:
 
         vector<double> nodevals = this->backward(output_error);
         for(int i=0; i<FIRST_LAYER_SIZE; i++)
-            nodevals[i] *= d_relu(this->first_layer_outputs[i]);
+            nodevals[i] *= d_sigmoid(this->first_layer_outputs[i]);
         
         for(int out=0; out<FIRST_LAYER_SIZE; out++) {
             perc_biases[out] -= LEARN_RATE * nodevals[out];
@@ -525,7 +536,7 @@ public:
     // Returns a vector of two values
     // result[0]: likelihood of rejecting
     // result[1]: likelihood of accepting
-    std::vector<double> nn_predict(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_2, uint64_t ip_3, int32_t cur_delta, uint32_t last_sig, uint32_t curr_sig, uint32_t confidence, uint32_t depth)
+    vector<double> nn_predict(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_2, uint64_t ip_3, int32_t cur_delta, uint32_t last_sig, uint32_t curr_sig, uint32_t confidence, uint32_t depth)
     {
         uint64_t perc_set[PERC_FEATURES];
         // Get the indexes in perc_set[]
@@ -538,7 +549,7 @@ public:
         }
 
         for(int i=0; i < FIRST_LAYER_SIZE; i++)
-            first_layer_outputs[i] = relu(first_layer_outputs[i]);
+            first_layer_outputs[i] = sigmoid(first_layer_outputs[i]);
 
         return softmax(this->forward(first_layer_outputs));
     }

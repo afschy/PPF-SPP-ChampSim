@@ -1,4 +1,5 @@
 .csconfig/
+.vscode/
 _configuration.mk
 
 **/__pycache__/
