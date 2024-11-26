@@ -7,6 +7,8 @@ _configuration.mk
 
 bin/
 
+Trace Files/
+
 **/*.o
 **/*.d
 
