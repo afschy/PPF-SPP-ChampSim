@@ -1,0 +1,56 @@
+{
+    "executable_name": "ppf_og",
+    "block_size": 64,
+    "page_size": 4096,
+    "heartbeat_frequency": 10000000,
+    "num_cores": 1,
+
+    "ooo_cpu": [
+        {
+            "frequency": 4000,
+            "rob_size": 256,
+            "branch_predictor": "perceptron"
+        }
+    ],
+
+    "L1D": {
+        "sets": 64,
+        "ways": 8,
+        "mshr_size": 8,
+        "latency": 4,
+        "prefetcher": "no",
+        "replacement": "lru"
+    },
+
+    "L2C": {
+        "sets": 512,
+        "ways": 8,
+        "mshr_size": 16,
+        "latency": 8,
+        "prefetch_as_load": false,
+        "virtual_prefetch": false,
+        "prefetch_activate": "LOAD",
+        "prefetcher": "ppf",
+        "replacement": "lru"
+    },
+
+    "LLC": {
+        "frequency": 4000,
+        "sets": 2048,
+        "ways": 16,
+        "mshr_size": 32,
+        "latency": 12,
+        "prefetcher": "no",
+        "replacement": "lru"
+    },
+
+    "physical_memory": {
+        "frequency": 1600,
+        "channels": 1,
+        "ranks": 1,
+        "banks": 8,
+        "rows": 65536,
+        "columns": 128,
+        "channel_width": 8
+    }
+}
