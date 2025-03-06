@@ -74,7 +74,7 @@ using std::vector;
 #define NEG_UPDT_THRESHOLD   -80
 
 // NN parameters
-#define FIRST_LAYER_SIZE 20
+#define FIRST_LAYER_SIZE 5
 #define LAST_LAYER_SIZE 2
 #define LEARN_RATE 0.2
 #define LLC_DELTA -0.3
@@ -359,9 +359,19 @@ double d_sigmoid(double x) { return x * (1 - x); }
 
 vector<double> softmax(const vector<double>& vec) {
     vector<double> result(vec.size());
-    double sum = 0;
-    for(int i=0; i<vec.size(); i++) sum += exp(vec[i]);
-    for(int i=0; i<vec.size(); i++) result[i] = exp(vec[i]) / sum;
+    // double sum = 0;
+    // for(int i=0; i<vec.size(); i++) sum += exp(vec[i]);
+    // for(int i=0; i<vec.size(); i++) result[i] = exp(vec[i]) / sum;
+    // return result;
+
+    if(vec[0] < vec[1]) {
+        result[1] = 1.0 / (1.0 + exp(vec[0] - vec[1]));
+        result[0] = 1.0 - result[1];
+    }
+    else {
+        result[0] = 1.0 / (1.0 + exp(vec[1] - vec[0]));
+        result[1] = 1.0 - result[0];
+    }
     return result;
 }
 
@@ -390,7 +400,7 @@ public:
         for(int out=0; out < output_count; out++) {
             for(int in=0; in < input_count; in++) {
                 w[out][in] = 1.00 * rand() / RAND_MAX;
-                w[out][in] *= sqrt(2.0 / input_count);
+                w[out][in] *= 2.00 * sqrt(6.0 / (input_count + output_count));
             }
         }
 
@@ -609,14 +619,6 @@ public:
 
     void nn_update(uint64_t base_addr, uint64_t ip, uint64_t ip_1, uint64_t ip_2, uint64_t ip_3, int32_t cur_delta, uint32_t last_sig, uint32_t curr_sig, uint32_t confidence, uint32_t depth, bool should_have_prefetched)
     {
-        uint64_t perc_set[PERC_FEATURES];
-        // Get the perceptron indexes
-        get_perc_index(base_addr, ip, ip_1, ip_2, ip_3, cur_delta, last_sig, curr_sig, confidence, depth, perc_set);
-        
-        vector<double> input(PERC_FEATURES);
-        for(int i=0; i<PERC_FEATURES; i++)
-            input[i] = 1.00 * perc_set[i] / PERC_DEPTH[i];
-
         vector<double> expected_result({0.0, 0.0});
         if(should_have_prefetched) expected_result[1] = 1;
         else expected_result[0] = 1;

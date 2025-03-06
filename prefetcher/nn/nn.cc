@@ -14,7 +14,7 @@ PATTERN_TABLE     PT;
 PREFETCH_FILTER FILTER;
 GLOBAL_REGISTER GHR;
 // PERCEPTRON PERC;
-vector<int> layer_size_list({FIRST_LAYER_SIZE, 10, LAST_LAYER_SIZE});
+vector<int> layer_size_list({FIRST_LAYER_SIZE, LAST_LAYER_SIZE});
 NN_2 NETWORK(layer_size_list);
 
 int depth_track[30];
